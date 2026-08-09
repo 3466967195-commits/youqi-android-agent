@@ -6,5 +6,7 @@
 *.jks
 *.keystore
 captures/
+release/*.png
+release/*-ui.xml
 .externalNativeBuild/
 .cxx/
