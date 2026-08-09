@@ -61,6 +61,8 @@ public final class MainActivity extends Activity implements AgentClient.Listener
 
     private AgentClient agent;
     private TermuxBridge termux;
+    private McpManager mcp;
+    private TermuxSetup termuxSetup;
     private ProjectStore project;
     private SecurePrefs securePrefs;
     private CharacterCard character;
@@ -252,7 +254,9 @@ public final class MainActivity extends Activity implements AgentClient.Listener
     }
 
     private void openWorkspace(JSONObject config) {
-        project = new ProjectStore(this); termux = new TermuxBridge(this); agent = new AgentClient(termux);
+        project = new ProjectStore(this); termux = new TermuxBridge(this);
+        termuxSetup = new TermuxSetup(this); mcp = new McpManager(this, termux);
+        agent = new AgentClient(termux, mcp);
         character = CharacterCard.load(this); applyCharacter(); setContentView(buildRoot()); restoreProject(); showAgentScreen();
         String announcement = config == null ? "" : config.optString("announcement", "").trim();
         if (!announcement.isEmpty()) new AlertDialog.Builder(this).setTitle("公告").setMessage(announcement).setPositiveButton("知道了", null).show();
@@ -635,6 +639,49 @@ public final class MainActivity extends Activity implements AgentClient.Listener
         appSettings.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()))));
         LinearLayout.LayoutParams appParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
         appParams.setMargins(0, dp(8), 0, 0); form.addView(appSettings, appParams);
+
+        // MCP section
+        section(form, "MCP 插件");
+        List<McpServer> servers = mcp.listServers();
+        if (servers.isEmpty()) {
+            TextView noMcp = text("暂无 MCP 服务器。添加后 Agent 可获得额外工具。", 12, MUTED, Typeface.NORMAL);
+            noMcp.setPadding(0, 0, 0, dp(8)); form.addView(noMcp);
+        } else {
+            for (McpServer s : servers) {
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(10), dp(8), dp(10), dp(8));
+                row.setBackground(rounded(PANEL_2, 6, LINE));
+                String label = (s.enabled ? "🟢 " : "⚪ ") + s.name + " (" + s.tools.size() + " tools)";
+                TextView mcpLabel = text(label, 13, TEXT, Typeface.NORMAL);
+                row.addView(mcpLabel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+                Button toggleBtn = button(s.enabled ? "关闭" : "开启", s.enabled);
+                toggleBtn.setOnClickListener(v -> {
+                    mcp.setEnabled(s.id, !s.enabled);
+                    if (!s.enabled) new Thread(() -> {
+                        try { mcp.startServer(s); runOnUiThread(() -> { showToast(s.name + " 已启动"); showSettingsScreen(); }); }
+                        catch (Exception e) { runOnUiThread(() -> showError("MCP 启动失败: " + e.getMessage())); }
+                    }).start();
+                    else { showToast(s.name + " 已关闭"); showSettingsScreen(); }
+                });
+                row.addView(toggleBtn, new LinearLayout.LayoutParams(dp(64), dp(36)));
+                Button delBtn = button("✕", false);
+                delBtn.setTextColor(RED);
+                delBtn.setOnClickListener(v -> new AlertDialog.Builder(this)
+                    .setTitle("移除 MCP 服务器").setMessage("确定移除 " + s.name + "?")
+                    .setPositiveButton("移除", (d, w) -> { mcp.removeServer(s.id); showSettingsScreen(); })
+                    .setNegativeButton("取消", null).show());
+                row.addView(delBtn, new LinearLayout.LayoutParams(dp(44), dp(36)));
+                LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                rowParams.setMargins(0, dp(4), 0, 0); form.addView(row, rowParams);
+            }
+        }
+        Button addMcp = button("+ 添加 MCP 服务器", true);
+        addMcp.setOnClickListener(v -> showAddMcpDialog());
+        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
+        addParams.setMargins(0, dp(8), 0, 0); form.addView(addMcp, addParams);
+
         scroll.addView(form); content.addView(scroll);
     }
 
@@ -716,15 +763,44 @@ public final class MainActivity extends Activity implements AgentClient.Listener
     }
 
     private String termuxStatus() {
-        if (!termux.isInstalled()) return "未检测到 Termux";
-        if (!termux.hasPermission()) return "Termux 已安装，等待 RUN_COMMAND 授权";
-        return "Termux 已连接，可以执行命令";
+        TermuxSetup.State state = termuxSetup.checkState();
+        switch (state) {
+            case NOT_INSTALLED: return "未安装 Termux — 点击下方按钮安装";
+            case INSTALLED_NO_PERMISSION: return "Termux 已安装，等待授权";
+            case READY: return "Termux 已就绪 ✅";
+            default: return "未知状态";
+        }
     }
 
     private void configureTermux() {
-        if (!termux.isInstalled()) { showError("请先安装 Termux，然后运行 termux-setup-storage，并在 ~/.termux/termux.properties 设置 allow-external-apps=true"); return; }
-        if (!termux.hasPermission()) { requestPermissions(new String[]{"com.termux.permission.RUN_COMMAND"}, REQUEST_TERMUX); return; }
-        Intent launch = getPackageManager().getLaunchIntentForPackage("com.termux"); if (launch != null) startActivity(launch);
+        TermuxSetup.State state = termuxSetup.checkState();
+        switch (state) {
+            case NOT_INSTALLED:
+                new AlertDialog.Builder(this).setTitle("安装 Termux")
+                    .setMessage("油漆需要 Termux 来执行命令。点击确定跳转到应用商店安装。\n\n安装后请打开 Termux 一次完成初始化，然后回到本页面继续。")
+                    .setPositiveButton("去安装", (d, w) -> termuxSetup.openInstallPage())
+                    .setNegativeButton("取消", null).show();
+                break;
+            case INSTALLED_NO_PERMISSION:
+                requestPermissions(new String[]{"com.termux.permission.RUN_COMMAND"}, REQUEST_TERMUX);
+                break;
+            case READY:
+                // Run bootstrap: auto-configure and install packages
+                new AlertDialog.Builder(this).setTitle("配置 Termux 环境")
+                    .setMessage("将自动开启外部应用支持并安装 git / ripgrep / python / nodejs。\n\n首次可能需要几分钟。")
+                    .setPositiveButton("开始配置", (d, w) -> {
+                        setBusy(true, "配置 Termux 环境");
+                        new Thread(() -> {
+                            try {
+                                termuxSetup.runBootstrap(termux);
+                                runOnUiThread(() -> { setBusy(false, "就绪"); showToast("Termux 环境配置完成 ✅"); showSettingsScreen(); });
+                            } catch (Exception e) {
+                                runOnUiThread(() -> { setBusy(false, "配置失败"); showError(e.getMessage()); });
+                            }
+                        }).start();
+                    }).setNegativeButton("取消", null).show();
+                break;
+        }
     }
 
     private void testTermuxShell() {
@@ -927,6 +1003,33 @@ public final class MainActivity extends Activity implements AgentClient.Listener
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private void showToast(String value) { Toast.makeText(this, value, Toast.LENGTH_SHORT).show(); }
     private void showError(String value) { new AlertDialog.Builder(this).setTitle("操作失败").setMessage(value).setPositiveButton("确定", null).show(); }
+
+    private void showAddMcpDialog() {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(24), dp(16), dp(24), dp(8));
+        form.addView(text("MCP 服务器配置", 16, TEXT, Typeface.BOLD));
+        EditText nameInput = edit("名称（如 Filesystem）", true); nameInput.setPadding(0, dp(12), 0, dp(8)); form.addView(nameInput);
+        EditText cmdInput = edit("命令（如 npx）", true); cmdInput.setPadding(0, dp(12), 0, dp(8)); form.addView(cmdInput);
+        EditText argsInput = edit("参数（如 -y @modelcontextprotocol/server-filesystem /sdcard）", true); argsInput.setPadding(0, dp(12), 0, dp(8)); form.addView(argsInput);
+        new AlertDialog.Builder(this).setView(form)
+            .setPositiveButton("添加", (d, w) -> {
+                String name = nameInput.getText().toString().trim();
+                String cmd = cmdInput.getText().toString().trim();
+                String args = argsInput.getText().toString().trim();
+                if (name.isEmpty() || cmd.isEmpty() || args.isEmpty()) { showToast("请填写完整"); return; }
+                McpServer srv = mcp.addServer(name, cmd, args);
+                new Thread(() -> {
+                    try {
+                        mcp.startServer(srv);
+                        runOnUiThread(() -> { showToast("MCP " + name + " 已启动，发现 " + srv.tools.size() + " 个工具"); showSettingsScreen(); });
+                    } catch (Exception e) {
+                        runOnUiThread(() -> showError("MCP 启动失败：" + e.getMessage()));
+                    }
+                }).start();
+            })
+            .setNegativeButton("取消", null).show();
+    }
 
     private static final class ChatEvent {
         final boolean user, tool, error; final String title, body;

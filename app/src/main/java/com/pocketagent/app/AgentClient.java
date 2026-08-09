@@ -37,12 +37,14 @@ final class AgentClient {
 
     private final AtomicBoolean busy = new AtomicBoolean(false);
     private final TermuxBridge termux;
+    private final McpManager mcp;
     private volatile String personaPrompt = "";
     private JSONArray responsesHistory = new JSONArray();
     private JSONArray chatHistory = new JSONArray();
 
-    AgentClient(TermuxBridge termux) {
+    AgentClient(TermuxBridge termux, McpManager mcp) {
         this.termux = termux;
+        this.mcp = mcp;
     }
 
     boolean isBusy() {
@@ -225,6 +227,10 @@ final class AgentClient {
                 return result;
             }
             default:
+                // Route to MCP if prefixed
+                if (name.startsWith("mcp__") && mcp != null) {
+                    return mcp.callTool(name, arguments);
+                }
                 throw new IllegalArgumentException("Unknown tool: " + name);
         }
     }
@@ -246,7 +252,7 @@ final class AgentClient {
                 .put("tools", responseTools());
     }
 
-    private static JSONArray responseTools() throws Exception {
+    private JSONArray responseTools() throws Exception {
         JSONArray result = new JSONArray();
         JSONArray definitions = toolDefinitions();
         for (int i = 0; i < definitions.length(); i++) {
@@ -260,7 +266,7 @@ final class AgentClient {
         return result;
     }
 
-    private static JSONArray chatTools() throws Exception {
+    private JSONArray chatTools() throws Exception {
         JSONArray result = new JSONArray();
         JSONArray definitions = toolDefinitions();
         for (int i = 0; i < definitions.length(); i++) {
@@ -270,7 +276,7 @@ final class AgentClient {
         return result;
     }
 
-    private static JSONArray toolDefinitions() throws Exception {
+    private JSONArray toolDefinitions() throws Exception {
         JSONArray tools = new JSONArray();
         tools.put(definition("list_files", "List direct children of a project directory",
                 objectSchema(new JSONObject().put("path", stringSchema("Relative directory path; empty for root")),
@@ -293,6 +299,12 @@ final class AgentClient {
                                 .put("command", stringSchema("Shell command to run"))
                                 .put("path", stringSchema("Relative working directory; empty for project root")),
                         new JSONArray().put("command").put("path"))));
+        // Merge MCP tools from enabled servers
+        if (mcp != null) {
+            for (McpServer.McpTool mcpTool : mcp.getAllTools()) {
+                tools.put(definition(mcpTool.name, mcpTool.description, mcpTool.inputSchema));
+            }
+        }
         return tools;
     }
 
