@@ -1,4 +1,4 @@
-package com.pocketagent.app;
+package com.wanggao.youqi;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -21,6 +21,7 @@ import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -87,18 +88,174 @@ public final class MainActivity extends Activity implements AgentClient.Listener
     private Spinner providerSpinner;
     private Spinner executionSpinner;
     private ProviderCatalog.Provider selectedProvider;
+    private EditText authServerInput;
+    private EditText authUsernameInput;
+    private EditText authDisplayNameInput;
+    private EditText authPasswordInput;
+    private CheckBox authConsent;
+    private boolean registerMode;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        project = new ProjectStore(this);
         securePrefs = new SecurePrefs(this);
-        termux = new TermuxBridge(this);
-        agent = new AgentClient(termux);
-        character = CharacterCard.load(this);
-        applyCharacter();
-        setContentView(buildRoot());
-        restoreProject();
-        showAgentScreen();
+        verifySession();
+    }
+
+    private void verifySession() {
+        String token;
+        try { token = securePrefs.getAuthToken(); }
+        catch (Exception error) { securePrefs.clearSession(); showAuthScreen(false, "登录信息无法读取，请重新登录"); return; }
+        if (token.isEmpty() || securePrefs.getBackendUrl().isEmpty()) { showAuthScreen(false, ""); return; }
+        showAuthLoading("正在验证账号");
+        final String savedToken = token;
+        new Thread(() -> {
+            try {
+                JSONObject response = AuthClient.me(securePrefs.getBackendUrl(), savedToken);
+                runOnUiThread(() -> acceptSession(response));
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (error instanceof AuthClient.AuthException && ((AuthClient.AuthException) error).status == 401) securePrefs.clearSession();
+                    showAuthScreen(false, "账号验证失败：" + error.getMessage());
+                });
+            }
+        }, "YouQi-Auth-Verify").start();
+    }
+
+    private void showAuthLoading(String status) {
+        LinearLayout page = authPage();
+        ProgressBar spinner = new ProgressBar(this);
+        spinner.setIndeterminateTintList(ColorStateList.valueOf(GREEN));
+        page.addView(spinner, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        TextView label = text(status, 14, MUTED, Typeface.NORMAL);
+        label.setPadding(0, dp(14), 0, 0); page.addView(label);
+        setContentView(page);
+    }
+
+    private void showAuthScreen(boolean register, String errorMessage) {
+        registerMode = register;
+        LinearLayout page = authPage();
+        TextView brand = text("油漆", 32, TEXT, Typeface.BOLD);
+        page.addView(brand);
+        TextView subtitle = text(register ? "创建账号后开始使用" : "登录你的 Agent 工作台", 14, MUTED, Typeface.NORMAL);
+        subtitle.setPadding(0, dp(6), 0, dp(24)); page.addView(subtitle);
+
+        authServerInput = edit("https://你的服务器域名", true);
+        authServerInput.setText(securePrefs.getBackendUrl());
+        page.addView(authLabel("账号服务器")); page.addView(authServerInput, authFieldParams());
+        authUsernameInput = edit("4-24 位字母、数字或下划线", true);
+        page.addView(authLabel("用户名")); page.addView(authUsernameInput, authFieldParams());
+        if (register) {
+            authDisplayNameInput = edit("在应用中显示的名称", true);
+            page.addView(authLabel("显示名称")); page.addView(authDisplayNameInput, authFieldParams());
+        }
+        authPasswordInput = edit("至少 8 位", true);
+        authPasswordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        page.addView(authLabel("密码")); page.addView(authPasswordInput, authFieldParams());
+        Button submit = button(register ? "注册并登录" : "登录", true);
+        submit.setOnClickListener(v -> submitAuth());
+        LinearLayout.LayoutParams submitParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50));
+        submitParams.setMargins(0, dp(12), 0, dp(8)); page.addView(submit, submitParams);
+        Button toggle = button(register ? "已有账号，返回登录" : "没有账号，创建一个", false);
+        toggle.setOnClickListener(v -> showAuthScreen(!registerMode, ""));
+        page.addView(toggle, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+        authConsent = new CheckBox(this);
+        authConsent.setText("我已阅读并同意用户协议和隐私政策");
+        authConsent.setTextColor(MUTED); authConsent.setTextSize(11); authConsent.setButtonTintList(ColorStateList.valueOf(GREEN));
+        authConsent.setGravity(Gravity.CENTER); page.addView(authConsent);
+        LinearLayout legal = new LinearLayout(this); legal.setGravity(Gravity.CENTER);
+        Button terms = button("用户协议", false); terms.setOnClickListener(v -> showLegalDialog(false));
+        Button privacy = button("隐私政策", false); privacy.setOnClickListener(v -> showLegalDialog(true));
+        legal.addView(terms, new LinearLayout.LayoutParams(dp(110), dp(38)));
+        LinearLayout.LayoutParams privacyParams = new LinearLayout.LayoutParams(dp(110), dp(38));
+        privacyParams.setMargins(dp(8), 0, 0, 0); legal.addView(privacy, privacyParams); page.addView(legal);
+        if (!errorMessage.isEmpty()) {
+            TextView error = text(errorMessage, 12, RED, Typeface.NORMAL);
+            error.setGravity(Gravity.CENTER); error.setPadding(0, dp(12), 0, 0); page.addView(error);
+        }
+        setContentView(page);
+    }
+
+    private LinearLayout authPage() {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL); page.setGravity(Gravity.CENTER);
+        int side = dp(28); page.setPadding(side, dp(28), side, dp(28)); page.setBackgroundColor(BG);
+        page.setOnApplyWindowInsetsListener((view, insets) -> {
+            view.setPadding(side + insets.getSystemWindowInsetLeft(), dp(28) + insets.getSystemWindowInsetTop(),
+                    side + insets.getSystemWindowInsetRight(), dp(28) + insets.getSystemWindowInsetBottom()); return insets;
+        });
+        return page;
+    }
+
+    private TextView authLabel(String value) {
+        TextView label = text(value, 12, MUTED, Typeface.BOLD);
+        label.setGravity(Gravity.LEFT); label.setPadding(0, dp(8), 0, dp(5));
+        return label;
+    }
+
+    private LinearLayout.LayoutParams authFieldParams() {
+        return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50));
+    }
+
+    private void submitAuth() {
+        String server = authServerInput.getText().toString().trim();
+        String username = authUsernameInput.getText().toString().trim();
+        String password = authPasswordInput.getText().toString();
+        String display = registerMode && authDisplayNameInput != null ? authDisplayNameInput.getText().toString().trim() : "";
+        if (authConsent == null || !authConsent.isChecked()) { showToast("请先阅读并同意用户协议和隐私政策"); return; }
+        try { AuthClient.normalizeBaseUrl(server); }
+        catch (Exception error) { showAuthScreen(registerMode, error.getMessage()); return; }
+        showAuthLoading(registerMode ? "正在创建账号" : "正在登录");
+        new Thread(() -> {
+            try {
+                JSONObject response = registerMode ? AuthClient.register(server, username, display, password)
+                        : AuthClient.login(server, username, password);
+                JSONObject user = response.getJSONObject("user");
+                securePrefs.saveSession(server, response.getString("token"), user.optString("display_name", username));
+                runOnUiThread(() -> acceptSession(response));
+            } catch (Exception error) { runOnUiThread(() -> showAuthScreen(registerMode, error.getMessage())); }
+        }, "YouQi-Auth").start();
+    }
+
+    private void showLegalDialog(boolean privacy) {
+        String title = privacy ? "隐私政策" : "用户协议";
+        String body = privacy
+                ? "账号后台保存用户名、显示名称、密码单向派生值、账号状态、注册时间和最后登录时间。\n\n"
+                + "后台不接收模型 API Key、聊天内容、角色卡、工程文件、工程路径、终端命令或输出。模型请求受所选供应商政策约束。\n\n"
+                + "管理员可启停账号、发布公告、开启维护模式和要求升级，但不能查看聊天或工程，也不能从后台向手机执行命令。\n\n"
+                + "运营者及权利人：王嘉泽。GitHub：3466967195。"
+                : "本软件为王嘉泽所有的闭源专有软件。未经书面许可，不得复制、修改、反编译、转售或提供衍生版本。\n\n"
+                + "AI 输出可能有误，文件修改和 Termux 命令可能造成数据损失。启用“完全自动”表示用户理解无需逐项确认的执行风险。\n\n"
+                + "用户不得利用本软件从事违法活动、攻击他人系统或侵犯第三方权利。第三方模型服务和 Termux 受各自条款约束。";
+        new AlertDialog.Builder(this).setTitle(title).setMessage(body).setPositiveButton("知道了", null).show();
+    }
+
+    private void acceptSession(JSONObject response) {
+        JSONObject config = response.optJSONObject("config");
+        JSONObject user = response.optJSONObject("user");
+        if (config != null && config.optBoolean("maintenance", false)
+                && (user == null || !"admin".equals(user.optString("role")))) {
+            showAuthBlocked("服务维护中", "管理员暂时关闭了客户端访问，请稍后再试。"); return;
+        }
+        if (config != null && config.optInt("min_version_code", 1) > BuildConfig.VERSION_CODE) {
+            showAuthBlocked("需要更新", "当前版本已停止使用，请安装管理员发布的新版本。"); return;
+        }
+        openWorkspace(config);
+    }
+
+    private void showAuthBlocked(String title, String message) {
+        LinearLayout page = authPage();
+        TextView heading = text(title, 24, TEXT, Typeface.BOLD); page.addView(heading);
+        TextView body = text(message, 14, MUTED, Typeface.NORMAL); body.setGravity(Gravity.CENTER); body.setPadding(0, dp(12), 0, dp(20)); page.addView(body);
+        Button retry = button("重新检查", true); retry.setOnClickListener(v -> verifySession());
+        page.addView(retry, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        setContentView(page);
+    }
+
+    private void openWorkspace(JSONObject config) {
+        project = new ProjectStore(this); termux = new TermuxBridge(this); agent = new AgentClient(termux);
+        character = CharacterCard.load(this); applyCharacter(); setContentView(buildRoot()); restoreProject(); showAgentScreen();
+        String announcement = config == null ? "" : config.optString("announcement", "").trim();
+        if (!announcement.isEmpty()) new AlertDialog.Builder(this).setTitle("公告").setMessage(announcement).setPositiveButton("知道了", null).show();
     }
 
     private View buildRoot() {
@@ -386,6 +543,17 @@ public final class MainActivity extends Activity implements AgentClient.Listener
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
         form.setPadding(dp(16), dp(12), dp(16), dp(24));
+
+        section(form, "账号");
+        form.addView(text(securePrefs.getDisplayName(), 15, TEXT, Typeface.BOLD));
+        TextView server = text(securePrefs.getBackendUrl(), 11, MUTED, Typeface.NORMAL);
+        server.setPadding(0, dp(4), 0, dp(8)); form.addView(server);
+        Button logout = button("退出登录", false);
+        logout.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("退出登录")
+                .setMessage("本机模型配置和工程授权会保留。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("退出", (dialog, which) -> { securePrefs.clearSession(); showAuthScreen(false, ""); }).show());
+        form.addView(logout, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
 
         section(form, "角色");
         form.addView(text(character == null ? "当前：默认 Agent" : "当前：" + character.name, 14, TEXT, Typeface.BOLD));

@@ -12,25 +12,35 @@
 - 扫描、搜索、读取和写入手机本地工程
 - 通过 Termux 执行真实 Shell 命令并回传退出码、标准输出和错误输出
 - 使用 Android Keystore AES-GCM 加密保存各供应商的 API Key
+- 用户注册、登录和加密令牌保存
+- 管理员控制台：用户列表、账号启停、公告、维护模式和最低版本
 
 ## APK
 
 ```text
-release/PocketAgent-debug.apk
+release/YouQi-1.0.0.apk
 ```
 
-连接已开启 USB 调试的手机后，可在 PowerShell 运行：
+这是包名为 `com.wanggao.youqi` 的 R8 混淆、RSA 4096 正式签名 APK。签名证书 SHA-256：
+
+```text
+9a7e313e91fa137a061952e991fcb476ff6c04d587cee042f4c090f7119f6bd6
+```
+
+连接已开启 USB 调试的手机后，可直接安装 Release APK：
 
 ```powershell
-.\install-on-phone.ps1
+adb install -r .\release\YouQi-1.0.0.apk
 ```
+
+签名密钥位于被 Git 忽略的 `private/signing`。必须离线备份密钥和 `RELEASE_CREDENTIALS.txt`；丢失后无法为现有用户发布覆盖升级。
 
 ## 使用
 
-1. 在“配置”页选择模型供应商，填写 API Key，并点击“获取模型”选择模型。
-2. 自定义中转站可填写 Base URL，例如 `https://example.com/v1`，也可填写完整的 `/responses` 或 `/chat/completions` 地址。
-3. 在“对话”页选择手机上的工程目录。
-4. 直接交代任务。Agent 会按需读取文件、修改工程并运行命令。
+1. 填写账号服务器 HTTPS 地址，注册或登录。
+2. 在“配置”页选择模型供应商，填写 API Key，并点击“获取模型”选择模型。
+3. 自定义中转站可填写 Base URL，例如 `https://example.com/v1`，也可填写完整的 `/responses` 或 `/chat/completions` 地址。
+4. 在“对话”页选择手机上的工程目录并交代任务。
 5. 在“配置”页可以导入 SillyTavern 角色卡，让 Agent 使用角色设定交流和解释执行过程。
 
 中转模型必须支持 Function Calling / Tools，否则只能聊天，不能执行 Agent 工具。
@@ -76,6 +86,36 @@ Android 11 及以上还需要在系统设置中允许 Termux“所有文件访�
 
 构建产物位于 `app/build/outputs/apk/debug/app-debug.apk`。
 
+## 账号后台
+
+后台位于 `backend/`，要求 Node.js 22.5 或更高版本，使用 Node 内置 SQLite，不需要安装 npm 依赖。
+
+```powershell
+.\scripts\create-backend-secrets.ps1
+cd backend
+npm start
+```
+
+管理员页面为 `http://127.0.0.1:8787/admin`。随机管理员密码保存在被 Git 忽略的 `private/backend/ADMIN_CREDENTIALS.txt`。
+
+对外分享前必须把后台部署到具有持久磁盘的服务器，并通过 Nginx、Caddy 或云平台提供 HTTPS。GitHub Pages 不能运行该后台。构建写入固定后台地址的 Release APK：
+
+```powershell
+.\gradlew.bat assembleRelease lintRelease -PYOUQI_BACKEND_URL=https://api.example.com
+```
+
+未传入 `YOUQI_BACKEND_URL` 时，登录页允许用户手动输入服务器地址。本机 USB 调试使用：
+
+```powershell
+adb reverse tcp:8787 tcp:8787
+```
+
+后台数据库在 `backend/data/youqi.sqlite`。生产环境必须备份数据库和 `.env`，并限制文件权限。
+
+## 闭源权利
+
+版权所有 © 2026 王嘉泽。保留所有权利。项目使用专有 [LICENSE](LICENSE)，不是开源软件。隐私与使用条款见 [PRIVACY.md](PRIVACY.md) 和 [TERMS.md](TERMS.md)。私有仓库计划使用 `3466967195/youqi-android-agent`。
+
 ## 安全边界
 
 - 工程文件 API 只访问系统文件选择器授权的目录，并拒绝包含 `..` 的相对路径。
@@ -83,3 +123,4 @@ Android 11 及以上还需要在系统设置中允许 Termux“所有文件访�
 - API Key 不以明文写入 SharedPreferences。
 - 角色卡内容会作为模型提示词发送到所配置的 API。
 - “完全自动”不会弹出写入或命令确认；切换到“每次询问”可恢复逐项审批。
+- 账号后台默认不接收模型 API Key、聊天、工程文件或终端内容，也不能远程执行手机命令。

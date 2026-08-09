@@ -1,4 +1,4 @@
-package com.pocketagent.app;
+package com.wanggao.youqi;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -81,6 +81,29 @@ final class SecurePrefs {
 
     String getExecutionMode() {
         return preferences.getString("execution_mode", MODE_STANDARD);
+    }
+
+    String getBackendUrl() {
+        String saved = preferences.getString("backend_url", "");
+        return saved.isEmpty() ? BuildConfig.BACKEND_URL : saved;
+    }
+
+    String getAuthToken() throws Exception {
+        String value = preferences.getString("auth_token", "");
+        return value.isEmpty() ? "" : decrypt(value);
+    }
+
+    String getDisplayName() {
+        return preferences.getString("display_name", "");
+    }
+
+    void saveSession(String backendUrl, String token, String displayName) throws Exception {
+        preferences.edit().putString("backend_url", AuthClient.normalizeBaseUrl(backendUrl))
+                .putString("auth_token", encrypt(token)).putString("display_name", displayName).apply();
+    }
+
+    void clearSession() {
+        preferences.edit().remove("auth_token").remove("display_name").apply();
     }
 
     void setExecutionMode(String mode) {

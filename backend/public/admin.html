@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>油漆控制台</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0f1217;--panel:#171c23;--line:#303a45;--text:#eaedf2;--muted:#97a3b0;--green:#47b881;--amber:#e6a34a;--red:#eb636a;--blue:#6ea8fe}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px system-ui,"Microsoft YaHei",sans-serif;letter-spacing:0}button,input,textarea{font:inherit}button{cursor:pointer}
+    header{height:64px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 24px;gap:14px}header strong{font-size:20px}header span{color:var(--muted)}main{max-width:1180px;margin:auto;padding:24px}
+    .login{max-width:390px;margin:12vh auto}.brand{font-size:30px;font-weight:800;margin-bottom:8px}.sub{color:var(--muted);margin-bottom:26px}.field{display:block;margin:14px 0 6px;color:var(--muted);font-weight:700}
+    input,textarea{width:100%;border:1px solid var(--line);background:#20262f;color:var(--text);padding:12px;border-radius:6px;outline:none}input:focus,textarea:focus{border-color:var(--green)}button{border:1px solid var(--line);background:#20262f;color:var(--text);padding:10px 14px;border-radius:6px}.primary{background:var(--green);border-color:var(--green);color:white;font-weight:700;width:100%;margin-top:18px}
+    .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.top h1{font-size:22px;margin:0}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:22px}.stat{background:var(--panel);padding:18px}.stat b{display:block;font-size:25px;margin-top:8px}.stat span{color:var(--muted)}
+    section{border-top:1px solid var(--line);padding:20px 0}h2{font-size:16px;margin:0 0 14px}.config{display:grid;grid-template-columns:1fr 160px;gap:14px}.config textarea{grid-row:span 2;min-height:94px;resize:vertical}.toggle{display:flex;gap:8px;align-items:center}.toggle input{width:auto}.save{background:var(--green);border-color:var(--green)}
+    table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:13px 10px;border-bottom:1px solid var(--line)}th{color:var(--muted);font-size:12px}code{color:var(--blue)}.state{font-weight:700}.on{color:var(--green)}.off{color:var(--red)}.danger{color:var(--red)}.error{color:var(--red);min-height:20px;margin-top:12px}.hidden{display:none!important}
+    @media(max-width:700px){header{padding:0 14px}main{padding:16px}.stats{grid-template-columns:1fr}.config{grid-template-columns:1fr}table{display:block;overflow:auto;white-space:nowrap}}
+  </style>
+</head>
+<body>
+  <div id="login" class="login">
+    <div class="brand">油漆控制台</div><div class="sub">用户、访问状态与版本策略</div>
+    <label class="field">管理员账号</label><input id="username" autocomplete="username">
+    <label class="field">密码</label><input id="password" type="password" autocomplete="current-password">
+    <button class="primary" onclick="login()">登录</button><div id="loginError" class="error"></div>
+  </div>
+  <div id="app" class="hidden">
+    <header><strong>油漆</strong><span>控制台</span></header>
+    <main>
+      <div class="top"><h1>运行概况</h1><button onclick="logout()">退出</button></div>
+      <div class="stats"><div class="stat"><span>注册用户</span><b id="total">0</b></div><div class="stat"><span>启用账号</span><b id="enabled">0</b></div><div class="stat"><span>最近登录</span><b id="active">0</b></div></div>
+      <section><h2>客户端策略</h2><div class="config">
+        <textarea id="announcement" maxlength="500" placeholder="向所有客户端显示公告"></textarea>
+        <label class="toggle"><input id="maintenance" type="checkbox">维护模式</label>
+        <input id="minVersion" type="number" min="1" placeholder="最低 versionCode">
+        <button class="save" onclick="saveConfig()">保存策略</button>
+      </div></section>
+      <section><h2>用户</h2><table><thead><tr><th>ID</th><th>账号</th><th>显示名称</th><th>角色</th><th>创建时间</th><th>最后登录</th><th>状态</th><th>操作</th></tr></thead><tbody id="users"></tbody></table></section>
+      <div id="error" class="error"></div>
+    </main>
+  </div>
+  <script>
+    let token=sessionStorage.getItem('youqi_admin_token')||'';
+    const $=id=>document.getElementById(id);
+    async function api(path,options={}){const res=await fetch(path,{...options,headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`,...options.headers}});const data=await res.json();if(!res.ok)throw new Error(data.message||'请求失败');return data}
+    async function login(){try{const data=await api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})});token=data.token;sessionStorage.setItem('youqi_admin_token',token);showApp();await refresh()}catch(e){$('loginError').textContent=e.message}}
+    function logout(){sessionStorage.removeItem('youqi_admin_token');location.reload()}
+    function showApp(){$('login').classList.add('hidden');$('app').classList.remove('hidden')}
+    async function refresh(){try{const [u,c]=await Promise.all([api('/api/admin/users'),api('/api/admin/config')]);renderUsers(u.users);renderConfig(c.config);$('error').textContent=''}catch(e){$('error').textContent=e.message;if(/登录|权限/.test(e.message))logout()}}
+    function renderUsers(users){$('total').textContent=users.length;$('enabled').textContent=users.filter(u=>u.enabled).length;const week=Date.now()-7*864e5;$('active').textContent=users.filter(u=>u.last_login_at&&Date.parse(u.last_login_at)>week).length;$('users').innerHTML=users.map(u=>`<tr><td><code>${u.id}</code></td><td>${esc(u.username)}</td><td>${esc(u.display_name)}</td><td>${u.role}</td><td>${date(u.created_at)}</td><td>${date(u.last_login_at)}</td><td class="state ${u.enabled?'on':'off'}">${u.enabled?'启用':'停用'}</td><td>${u.role==='admin'?'':`<button class="${u.enabled?'danger':''}" onclick="setEnabled(${u.id},${!u.enabled})">${u.enabled?'停用':'启用'}</button>`}</td></tr>`).join('')}
+    function renderConfig(c){$('announcement').value=c.announcement||'';$('maintenance').checked=c.maintenance;$('minVersion').value=c.min_version_code}
+    async function setEnabled(id,enabled){try{await api(`/api/admin/users/${id}`,{method:'PATCH',body:JSON.stringify({enabled})});await refresh()}catch(e){$('error').textContent=e.message}}
+    async function saveConfig(){try{await api('/api/admin/config',{method:'PUT',body:JSON.stringify({announcement:$('announcement').value,maintenance:$('maintenance').checked,min_version_code:Number($('minVersion').value)})});$('error').textContent='策略已保存'}catch(e){$('error').textContent=e.message}}
+    const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const date=v=>v?new Date(v).toLocaleString():'-';
+    if(token){showApp();refresh()}
+  </script>
+</body>
+</html>

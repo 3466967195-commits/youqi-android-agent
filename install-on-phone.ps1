@@ -1,14 +1,14 @@
 $ErrorActionPreference = "Stop"
 
 $adb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
-$apk = Join-Path $PSScriptRoot "release\PocketAgent-debug.apk"
+$apk = Join-Path $PSScriptRoot "release\YouQi-1.0.0.apk"
 
 if (-not (Test-Path -LiteralPath $adb)) {
     throw "ADB not found: $adb"
 }
 
 if (-not (Test-Path -LiteralPath $apk)) {
-    throw "APK not found: $apk. Run .\gradlew.bat assembleDebug first."
+    throw "APK not found: $apk. Run .\gradlew.bat assembleRelease first."
 }
 
 $devices = & $adb devices
@@ -22,4 +22,4 @@ if ($LASTEXITCODE -ne 0) {
     throw "APK installation failed."
 }
 
-& $adb shell am start -n com.pocketagent.app/.MainActivity
+& $adb shell am start -n com.wanggao.youqi/.MainActivity

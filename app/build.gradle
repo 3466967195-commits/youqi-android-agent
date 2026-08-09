@@ -2,23 +2,50 @@ plugins {
     id "com.android.application"
 }
 
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
-    namespace "com.pocketagent.app"
+    namespace "com.wanggao.youqi"
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.pocketagent.app"
+        applicationId "com.wanggao.youqi"
         minSdk 24
         targetSdk 36
-        versionCode 3
-        versionName "0.3.0"
+        versionCode 4
+        versionName "1.0.0"
+        buildConfigField "String", "BACKEND_URL", '"' + providers.gradleProperty("YOUQI_BACKEND_URL").getOrElse("") + '"'
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                storeFile rootProject.file(keystoreProperties["storeFile"])
+                storePassword keystoreProperties["storePassword"]
+                keyAlias keystoreProperties["keyAlias"]
+                keyPassword keystoreProperties["keyPassword"]
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            buildConfigField "String", "BACKEND_URL", '"http://127.0.0.1:8787"'
+        }
         release {
-            minifyEnabled false
+            signingConfig signingConfigs.release
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     compileOptions {

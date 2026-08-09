@@ -5,6 +5,10 @@
 *.iml
 *.jks
 *.keystore
+keystore.properties
+private/
+backend/data/
+backend/.env
 captures/
 release/*.png
 release/*-ui.xml
