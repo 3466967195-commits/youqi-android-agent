@@ -198,7 +198,7 @@ function bootstrapAdmin() {
   if (existing) return;
   validatePassword(password);
   db.prepare("INSERT INTO users(username,display_name,password_hash,role,created_at) VALUES(?,?,?,'admin',?)")
-    .run(normalizeUsername(username), '王嘉泽', hashPassword(password), new Date().toISOString());
+    .run(normalizeUsername(username), '油漆工作室', hashPassword(password), new Date().toISOString());
   console.log(`Created administrator: ${username}`);
 }
 

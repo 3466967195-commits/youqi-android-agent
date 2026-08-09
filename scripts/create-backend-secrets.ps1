@@ -15,7 +15,7 @@ function New-Secret([int]$bytes) {
 
 $jwtSecret = New-Secret 48
 $adminPassword = New-Secret 24
-$adminUser = "wanggao_admin"
+$adminUser = "youqi_admin"
 
 @"
 PORT=8787
@@ -26,7 +26,7 @@ YOUQI_ADMIN_PASSWORD=$adminPassword
 
 @"
 YouQi control server administrator
-Owner: Wang Jiaze (王嘉泽)
+Owner: YouQi Studio (油漆工作室)
 Admin URL: /admin
 Username: $adminUser
 Password: $adminPassword

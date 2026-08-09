@@ -1,4 +1,4 @@
-package com.wanggao.youqi;
+package com.youqi.studio;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -222,8 +222,8 @@ public final class MainActivity extends Activity implements AgentClient.Listener
                 ? "账号后台保存用户名、显示名称、密码单向派生值、账号状态、注册时间和最后登录时间。\n\n"
                 + "后台不接收模型 API Key、聊天内容、角色卡、工程文件、工程路径、终端命令或输出。模型请求受所选供应商政策约束。\n\n"
                 + "管理员可启停账号、发布公告、开启维护模式和要求升级，但不能查看聊天或工程，也不能从后台向手机执行命令。\n\n"
-                + "运营者及权利人：王嘉泽。GitHub：3466967195。"
-                : "本软件为王嘉泽所有的闭源专有软件。未经书面许可，不得复制、修改、反编译、转售或提供衍生版本。\n\n"
+                + "运营者及权利人：油漆工作室。GitHub：3466967195。"
+                : "本软件为油漆工作室所有的闭源专有软件。未经书面许可，不得复制、修改、反编译、转售或提供衍生版本。\n\n"
                 + "AI 输出可能有误，文件修改和 Termux 命令可能造成数据损失。启用“完全自动”表示用户理解无需逐项确认的执行风险。\n\n"
                 + "用户不得利用本软件从事违法活动、攻击他人系统或侵犯第三方权利。第三方模型服务和 Termux 受各自条款约束。";
         new AlertDialog.Builder(this).setTitle(title).setMessage(body).setPositiveButton("知道了", null).show();

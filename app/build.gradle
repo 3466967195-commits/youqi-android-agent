@@ -9,11 +9,11 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace "com.wanggao.youqi"
+    namespace "com.youqi.studio"
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.wanggao.youqi"
+        applicationId "com.youqi.studio"
         minSdk 24
         targetSdk 36
         versionCode 4

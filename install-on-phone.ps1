@@ -22,4 +22,4 @@ if ($LASTEXITCODE -ne 0) {
     throw "APK installation failed."
 }
 
-& $adb shell am start -n com.wanggao.youqi/.MainActivity
+& $adb shell am start -n com.youqi.studio/.MainActivity

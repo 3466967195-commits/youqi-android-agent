@@ -1,4 +1,4 @@
-package com.wanggao.youqi;
+package com.youqi.studio;
 
 import android.app.PendingIntent;
 import android.content.Context;

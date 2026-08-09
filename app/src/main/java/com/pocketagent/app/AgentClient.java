@@ -1,4 +1,4 @@
-package com.wanggao.youqi;
+package com.youqi.studio;
 
 import org.json.JSONArray;
 import org.json.JSONObject;

@@ -1,4 +1,4 @@
-package com.wanggao.youqi;
+package com.youqi.studio;
 
 import java.util.Arrays;
 import java.util.Collections;

@@ -17,7 +17,7 @@ $password = [Convert]::ToBase64String($passwordBytes).Replace("+", "A").Replace(
 
 & keytool -genkeypair -v -keystore $keystore -storetype PKCS12 -alias youqi-release `
     -keyalg RSA -keysize 4096 -validity 10000 -storepass $password -keypass $password `
-    -dname "CN=Wang Jiaze, OU=YouQi, O=Wang Jiaze, C=CN"
+    -dname "CN=YouQi Studio, OU=YouQi, O=YouQi Studio, C=CN"
 if ($LASTEXITCODE -ne 0) { throw "keytool failed" }
 
 @"
@@ -29,8 +29,8 @@ keyPassword=$password
 
 @"
 YouQi Android release signing credentials
-Owner: Wang Jiaze (王嘉泽)
-Package: com.wanggao.youqi
+Owner: YouQi Studio (油漆工作室)
+Package: com.youqi.studio
 Alias: youqi-release
 Password: $password
 

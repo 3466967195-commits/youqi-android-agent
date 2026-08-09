@@ -21,10 +21,10 @@
 release/YouQi-1.0.0.apk
 ```
 
-这是包名为 `com.wanggao.youqi` 的 R8 混淆、RSA 4096 正式签名 APK。签名证书 SHA-256：
+这是包名为 `com.youqi.studio` 的 R8 混淆、RSA 4096 正式签名 APK。签名证书 SHA-256：
 
 ```text
-9a7e313e91fa137a061952e991fcb476ff6c04d587cee042f4c090f7119f6bd6
+a2381853e0422bada72d0e72ff55aa4473f6d364fea13a3d2649734656247b48
 ```
 
 连接已开启 USB 调试的手机后，可直接安装 Release APK：
@@ -114,7 +114,7 @@ adb reverse tcp:8787 tcp:8787
 
 ## 闭源权利
 
-版权所有 © 2026 王嘉泽。保留所有权利。项目使用专有 [LICENSE](LICENSE)，不是开源软件。隐私与使用条款见 [PRIVACY.md](PRIVACY.md) 和 [TERMS.md](TERMS.md)。私有仓库计划使用 `3466967195/youqi-android-agent`。
+版权所有 © 2026 油漆工作室。保留所有权利。项目使用专有 [LICENSE](LICENSE)，不是开源软件。隐私与使用条款见 [PRIVACY.md](PRIVACY.md) 和 [TERMS.md](TERMS.md)。私有仓库为 `3466967195-commits/youqi-android-agent`。
 
 ## 安全边界
 
