@@ -416,13 +416,15 @@ public final class MainActivity extends Activity implements AgentClient.Listener
         row.setGravity(event.user ? Gravity.RIGHT | Gravity.TOP : Gravity.LEFT | Gravity.TOP);
         row.setPadding(0, dp(6), 0, dp(6));
         View avatar = avatar(event.user);
-        TextView bubble = text(event.body, 15, TEXT, Typeface.NORMAL);
+        TextView bubble = text("", 15, TEXT, Typeface.NORMAL);
         bubble.setTextIsSelectable(true);
         bubble.setLineSpacing(0, 1.12f);
         bubble.setPadding(dp(13), dp(10), dp(13), dp(10));
         bubble.setBackground(rounded(event.user ? USER : PANEL_2, 7, event.user ? USER : LINE));
         int max = (int) (getResources().getDisplayMetrics().widthPixels * 0.72f);
         bubble.setMaxWidth(max);
+        // Render basic markdown: **bold**, *italic*
+        bubble.setText(renderMarkdown(event.body));
         LinearLayout.LayoutParams bubbleParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
         if (event.user) {
@@ -435,6 +437,57 @@ public final class MainActivity extends Activity implements AgentClient.Listener
             row.addView(bubble, bubbleParams);
         }
         return row;
+    }
+
+    /** Simple markdown-to-Spanned for **bold** and *italic*. */
+    private android.text.Spanned renderMarkdown(String raw) {
+        // Strip leading/trailing whitespace
+        String text = raw.trim();
+        // Build spannable with bold and italic
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+        int i = 0;
+        while (i < text.length()) {
+            // Check for ***...*** (bold+italic)
+            if (i + 6 <= text.length() && text.startsWith("***", i)) {
+                int end = text.indexOf("***", i + 3);
+                if (end > i) {
+                    int start = sb.length();
+                    sb.append(text, i + 3, end);
+                    sb.setSpan(new android.text.style.StyleSpan(Typeface.BOLD_ITALIC), start, sb.length(),
+                            android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    i = end + 3;
+                    continue;
+                }
+            }
+            // Check for **bold**
+            if (i + 4 <= text.length() && text.startsWith("**", i)) {
+                int end = text.indexOf("**", i + 2);
+                if (end > i) {
+                    int start = sb.length();
+                    sb.append(text, i + 2, end);
+                    sb.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), start, sb.length(),
+                            android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    i = end + 2;
+                    continue;
+                }
+            }
+            // Check for *italic* (single *, not followed by another *)
+            if (i + 2 <= text.length() && text.charAt(i) == '*' && (i == 0 || text.charAt(i - 1) != '*')
+                    && (i + 1 >= text.length() || text.charAt(i + 1) != '*')) {
+                int end = text.indexOf('*', i + 1);
+                if (end > i) {
+                    int start = sb.length();
+                    sb.append(text, i + 1, end);
+                    sb.setSpan(new android.text.style.StyleSpan(Typeface.ITALIC), start, sb.length(),
+                            android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    i = end + 1;
+                    continue;
+                }
+            }
+            sb.append(text.charAt(i));
+            i++;
+        }
+        return android.text.SpannedString.valueOf(sb);
     }
 
     private View avatar(boolean user) {
@@ -463,13 +516,33 @@ public final class MainActivity extends Activity implements AgentClient.Listener
         params.setMargins(dp(46), dp(3), dp(18), dp(3));
         box.setLayoutParams(params);
         box.setBackground(rounded(PANEL, 4, LINE));
-        box.addView(text(event.title, 11, event.error ? RED : GREEN, Typeface.BOLD));
-        TextView detail = text(event.body, 12, MUTED, Typeface.NORMAL);
-        detail.setTypeface(Typeface.MONOSPACE);
-        detail.setTextIsSelectable(true);
-        detail.setMaxLines(18);
-        detail.setPadding(0, dp(4), 0, 0);
-        box.addView(detail);
+
+        // Header row: icon + title + toggle hint
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        String icon = event.error ? "✕ " : event.collapsed ? "▶ " : "▼ ";
+        TextView titleView = text(icon + event.title, 12, event.error ? RED : GREEN, Typeface.BOLD);
+        header.addView(titleView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        TextView hint = text(event.collapsed ? "展开" : "收起", 10, MUTED, Typeface.NORMAL);
+        header.addView(hint);
+        box.addView(header);
+
+        // Detail (hidden when collapsed)
+        if (!event.collapsed) {
+            TextView detail = text(event.body, 12, MUTED, Typeface.NORMAL);
+            detail.setTypeface(Typeface.MONOSPACE);
+            detail.setTextIsSelectable(true);
+            detail.setMaxLines(25);
+            detail.setPadding(0, dp(6), 0, 0);
+            box.addView(detail);
+        }
+
+        // Click to toggle
+        box.setOnClickListener(v -> {
+            event.collapsed = !event.collapsed;
+            renderEvents();
+        });
         return box;
     }
 
@@ -1033,7 +1106,12 @@ public final class MainActivity extends Activity implements AgentClient.Listener
 
     private static final class ChatEvent {
         final boolean user, tool, error; final String title, body;
-        ChatEvent(boolean user, boolean tool, boolean error, String title, String body) { this.user = user; this.tool = tool; this.error = error; this.title = title; this.body = body == null ? "" : body.trim(); }
+        boolean collapsed; // tool events start collapsed
+        ChatEvent(boolean user, boolean tool, boolean error, String title, String body) {
+            this.user = user; this.tool = tool; this.error = error;
+            this.title = title; this.body = body == null ? "" : body.trim();
+            this.collapsed = tool; // tool events default to collapsed
+        }
         static ChatEvent user(String value) { return new ChatEvent(true, false, false, "", value); }
         static ChatEvent assistant(String value) { return new ChatEvent(false, false, false, "", value); }
         static ChatEvent tool(String title, String value, boolean error) { return new ChatEvent(false, true, error, title, value); }

@@ -67,15 +67,51 @@ final class CharacterCard {
 
     String agentPrompt() {
         StringBuilder out = new StringBuilder();
-        out.append("Adopt the following character persona while talking to the user and while explaining work. ")
-                .append("The persona changes tone and reasoning style, but never overrides tool accuracy, user intent, or safety rules. ")
-                .append("Never invent tool results. Character name: ").append(name).append(".\n");
-        add(out, "Description", description);
-        add(out, "Personality", personality);
-        add(out, "Scenario", scenario);
-        add(out, "Character system prompt", systemPrompt);
-        add(out, "Dialogue examples", exampleDialogue);
-        add(out, "Post-history instruction", postHistory);
+
+        // Character identity block (SillyTavern style)
+        out.append("[Character: ").append(name).append("]\n");
+        if (!description.isEmpty()) out.append(description).append("\n");
+        if (!personality.isEmpty()) out.append(personality).append("\n");
+
+        // Scenario
+        if (!scenario.isEmpty()) {
+            out.append("\n[Scenario]\n").append(scenario).append("\n");
+        }
+
+        // Roleplay instructions — this is the key part for "酒馆 feel"
+        out.append("\n[Roleplay Instructions]\n");
+        out.append("You are ").append(name)
+           .append(". You are speaking directly to the user in a conversation.\n");
+        out.append("- Write in ").append(name).append("'s voice: use their speech patterns, vocabulary, and mannerisms.\n");
+        out.append("- Describe actions, body language, facial expressions, and internal thoughts between *asterisks*.\n");
+        out.append("- Stay in character at all times — every reply should sound like ").append(name).append(" is speaking.\n");
+        out.append("- Keep responses natural and conversational, not robotic or encyclopedic.\n");
+        out.append("- NEVER write dialogue or actions for the user. The user controls their own character.\n");
+
+        // Example dialogue — frame it as examples of how the character speaks
+        if (!exampleDialogue.isEmpty()) {
+            out.append("\n[Example Conversations — study how ").append(name).append(" speaks]\n");
+            out.append(exampleDialogue).append("\n");
+        }
+
+        // System-level instructions from the card
+        if (!systemPrompt.isEmpty()) {
+            out.append("\n[Character System Note]\n").append(systemPrompt).append("\n");
+        }
+        if (!postHistory.isEmpty()) {
+            out.append("\n").append(postHistory).append("\n");
+        }
+
+        // Coding agent bridge — character keeps personality while doing real work
+        out.append("\n[Coding Agent Protocol]\n");
+        out.append("When the user asks you to work on code or projects, you must:\n");
+        out.append("- Maintain your character's personality while explaining your approach and reasoning.\n");
+        out.append("- Describe what you're doing in character voice, using *actions* to narrate your work.\n");
+        out.append("- Use the available tools (list_files, read_file, search_files, write_file, run_command) to inspect and modify the project.\n");
+        out.append("- NEVER fabricate or hallucinate tool results. Only report what actually happened.\n");
+        out.append("- If a tool fails, honestly describe the error and suggest alternatives — in character.\n");
+        out.append("- Once the task is complete, report what was done and verify it worked.\n");
+
         return replaceVars(out.toString(), name);
     }
 
