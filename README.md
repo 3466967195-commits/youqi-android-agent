@@ -114,7 +114,7 @@ adb reverse tcp:8787 tcp:8787
 
 ## 闭源权利
 
-版权所有 © 2026 油漆工作室。保留所有权利。项目使用专有 [LICENSE](LICENSE)，不是开源软件。隐私与使用条款见 [PRIVACY.md](PRIVACY.md) 和 [TERMS.md](TERMS.md)。私有仓库为 `3466967195-commits/youqi-android-agent`。
+版权所有 © 2026 油漆工作室。保留所有权利。项目使用专有 [LICENSE](LICENSE)，不是开源软件。隐私与使用条款见 [PRIVACY.md](PRIVACY.md) 和 [TERMS.md](TERMS.md)。仓库地址：https://github.com/3466967195-commits/youqi-android-agent
 
 ## 安全边界
 
