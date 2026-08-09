@@ -103,7 +103,10 @@ public final class MainActivity extends Activity implements AgentClient.Listener
         verifySession();
     }
 
+    private static final boolean LOCAL_MODE = true; // 个人使用，跳过登录
+
     private void verifySession() {
+        if (LOCAL_MODE) { openWorkspace(null); return; }
         String token;
         try { token = securePrefs.getAuthToken(); }
         catch (Exception error) { securePrefs.clearSession(); showAuthScreen(false, "登录信息无法读取，请重新登录"); return; }
@@ -621,16 +624,18 @@ public final class MainActivity extends Activity implements AgentClient.Listener
         form.setOrientation(LinearLayout.VERTICAL);
         form.setPadding(dp(16), dp(12), dp(16), dp(24));
 
-        section(form, "账号");
-        form.addView(text(securePrefs.getDisplayName(), 15, TEXT, Typeface.BOLD));
-        TextView server = text(securePrefs.getBackendUrl(), 11, MUTED, Typeface.NORMAL);
-        server.setPadding(0, dp(4), 0, dp(8)); form.addView(server);
-        Button logout = button("退出登录", false);
-        logout.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("退出登录")
-                .setMessage("本机模型配置和工程授权会保留。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("退出", (dialog, which) -> { securePrefs.clearSession(); showAuthScreen(false, ""); }).show());
-        form.addView(logout, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        if (!LOCAL_MODE) {
+            section(form, "账号");
+            form.addView(text(securePrefs.getDisplayName(), 15, TEXT, Typeface.BOLD));
+            TextView server = text(securePrefs.getBackendUrl(), 11, MUTED, Typeface.NORMAL);
+            server.setPadding(0, dp(4), 0, dp(8)); form.addView(server);
+            Button logout = button("退出登录", false);
+            logout.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("退出登录")
+                    .setMessage("本机模型配置和工程授权会保留。")
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("退出", (dialog, which) -> { securePrefs.clearSession(); showAuthScreen(false, ""); }).show());
+            form.addView(logout, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        }
 
         section(form, "角色");
         form.addView(text(character == null ? "当前：默认 Agent" : "当前：" + character.name, 14, TEXT, Typeface.BOLD));
