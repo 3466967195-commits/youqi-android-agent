@@ -10,6 +10,7 @@ private/
 backend/data/
 backend/.env
 captures/
+tools/
 release/*.png
 release/*-ui.xml
 .externalNativeBuild/
