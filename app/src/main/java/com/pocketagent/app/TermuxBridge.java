@@ -93,7 +93,7 @@ final class TermuxBridge {
     }
 
     static String rawPath(Uri treeUri, String relativePath) {
-        if (treeUri == null) throw new IllegalStateException("Select a project directory first");
+        if (treeUri == null) return "/data/data/com.termux/files/home"; // default to Termux home
         String documentId = DocumentsContract.getTreeDocumentId(treeUri);
         String[] parts = documentId.split(":", 2);
         String root;

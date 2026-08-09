@@ -30,10 +30,13 @@ final class AgentClient {
     private static final int MAX_TOOL_ROUNDS = 30;
     private static final String BASE_SYSTEM_PROMPT =
             "You are a coding agent running on the user's Android phone. Work autonomously toward the requested task. "
-                    + "Inspect the project before editing. Use relative paths only. Use project file tools for reliable edits. "
-                    + "Use run_command for git, search, builds, tests, scripts, and other terminal work when available. "
+                    + "Access files via three routes: 1) project tools (list_files/read_file/write_file/search_files) for files in a user-selected project workspace, "
+                    + "2) run_command shell commands (full Termux Linux environment with storage access), "
+                    + "3) file attachments the user sends inline with their message. "
+                    + "If the user hasn't selected a project yet, suggest they do so for file editing, or use run_command to work with files at their filesystem paths. "
+                    + "Use relative paths within the project; use absolute paths (/storage/emulated/0/...) with run_command. "
                     + "Never claim that an action succeeded before its tool result confirms it. Keep changes focused. "
-                    + "Reply in the user's language and summarize completed work and verification.";
+                    + "Reply in the user's language. The user may send images or files — analyze them as context for the task.";
 
     private final AtomicBoolean busy = new AtomicBoolean(false);
     private final TermuxBridge termux;
@@ -188,18 +191,22 @@ final class AgentClient {
         listener.onToolCall(name, toolDetail(name, arguments));
         switch (name) {
             case "list_files":
+                if (!project.isReady()) return noProjectMsg("list_files", "list directory contents");
                 return new JSONObject().put("ok", true)
                         .put("entries", project.listFiles(arguments.optString("path", ""))).toString();
             case "read_file": {
+                if (!project.isReady()) return noProjectMsg("read_file", "read file content");
                 String path = arguments.getString("path");
                 return new JSONObject().put("ok", true).put("path", path)
                         .put("content", project.readFile(path)).toString();
             }
             case "search_files":
+                if (!project.isReady()) return noProjectMsg("search_files", "search file content");
                 return new JSONObject().put("ok", true)
                         .put("matches", project.search(arguments.getString("query"),
                                 arguments.optString("path", ""))).toString();
             case "write_file": {
+                if (!project.isReady()) return noProjectMsg("write_file", "edit files");
                 String path = ProjectStore.normalize(arguments.getString("path"));
                 String content = arguments.getString("content");
                 String oldContent = project.readIfExists(path);
@@ -233,6 +240,12 @@ final class AgentClient {
                 }
                 throw new IllegalArgumentException("Unknown tool: " + name);
         }
+    }
+
+    private String noProjectMsg(String tool, String purpose) throws Exception {
+        return new JSONObject().put("ok", false)
+                .put("message", "没有选择工程目录，无法" + purpose
+                        + "。请提醒用户先在文件页面选择一个工程文件夹，或者使用 run_command 通过终端操作文件。").toString();
     }
 
     private static String toolDetail(String name, JSONObject arguments) {

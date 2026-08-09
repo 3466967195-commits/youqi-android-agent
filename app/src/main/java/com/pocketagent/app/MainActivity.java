@@ -45,6 +45,9 @@ public final class MainActivity extends Activity implements AgentClient.Listener
     private static final int PICK_PROJECT = 41;
     private static final int REQUEST_TERMUX = 42;
     private static final int PICK_CHARACTER = 43;
+    private static final int PICK_ATTACHMENT = 44;
+    private static final int CAPTURE_PHOTO = 45;
+    private Uri pendingPhotoUri;
     private static final String STATE_PREFS = "pocket_agent_state";
 
     private static final int BG = Color.rgb(15, 18, 23);
@@ -76,6 +79,8 @@ public final class MainActivity extends Activity implements AgentClient.Listener
     private ScrollView messageScroll;
     private EditText promptInput;
     private Button sendButton;
+    private final List<Uri> pendingAttachments = new ArrayList<>();
+    private LinearLayout attachmentStrip;
     private ListView fileList;
     private ArrayAdapter<String> fileAdapter;
     private List<ProjectStore.Entry> displayedFiles = new ArrayList<>();
@@ -365,10 +370,31 @@ public final class MainActivity extends Activity implements AgentClient.Listener
         page.addView(messageScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         renderEvents();
 
+        attachmentStrip = new LinearLayout(this);
+        attachmentStrip.setOrientation(LinearLayout.HORIZONTAL);
+        attachmentStrip.setPadding(dp(10), dp(4), dp(10), 0);
+        attachmentStrip.setVisibility(View.GONE);
+        page.addView(attachmentStrip);
+
         LinearLayout composer = new LinearLayout(this);
         composer.setGravity(Gravity.BOTTOM | Gravity.CENTER_VERTICAL);
         composer.setPadding(dp(10), dp(8), dp(10), dp(10));
         composer.setBackgroundColor(PANEL);
+
+        // Attachment button
+        Button attachBtn = iconButton("📎", "附加文件或图片");
+        attachBtn.setTextSize(18);
+        attachBtn.setOnClickListener(v -> pickAttachment());
+        composer.addView(attachBtn, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
+        // Camera button
+        Button cameraBtn = iconButton("📷", "拍照");
+        cameraBtn.setTextSize(18);
+        cameraBtn.setOnClickListener(v -> capturePhoto());
+        LinearLayout.LayoutParams camParams = new LinearLayout.LayoutParams(dp(42), dp(42));
+        camParams.setMargins(dp(4), 0, 0, 0);
+        composer.addView(cameraBtn, camParams);
+
         promptInput = edit("发消息，或交代一个任务", false);
         promptInput.setMinLines(1);
         promptInput.setMaxLines(5);
@@ -909,9 +935,35 @@ public final class MainActivity extends Activity implements AgentClient.Listener
 
     @Override @SuppressLint("WrongConstant") protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
-        if (requestCode == PICK_CHARACTER) { importCharacter(data.getData(), data.getFlags()); return; }
+        if (resultCode != RESULT_OK || data == null) return;
+        if (requestCode == PICK_CHARACTER) { if (data.getData() != null) importCharacter(data.getData(), data.getFlags()); return; }
+        if (requestCode == PICK_ATTACHMENT) {
+            if (data.getClipData() != null) {
+                for (int i = 0; i < data.getClipData().getItemCount(); i++)
+                    pendingAttachments.add(data.getClipData().getItemAt(i).getUri());
+            } else if (data.getData() != null) {
+                pendingAttachments.add(data.getData());
+            }
+            updateAttachmentStrip();
+            return;
+        }
+        if (requestCode == CAPTURE_PHOTO) {
+            // Camera may return image in extras or as URI
+            if (data.getData() != null) pendingAttachments.add(data.getData());
+            else if (data.getExtras() != null && data.getExtras().get("data") != null) {
+                android.graphics.Bitmap bmp = (android.graphics.Bitmap) data.getExtras().get("data");
+                String path = android.os.Environment.getExternalStoragePublicDirectory(
+                        android.os.Environment.DIRECTORY_PICTURES) + "/YouQi_" + System.currentTimeMillis() + ".jpg";
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(path)) {
+                    bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, fos);
+                    pendingAttachments.add(Uri.fromFile(new java.io.File(path)));
+                } catch (Exception e) { showToast("保存照片失败"); }
+            }
+            updateAttachmentStrip();
+            return;
+        }
         if (requestCode != PICK_PROJECT) return;
+        if (data.getData() == null) return;
         Uri uri = data.getData();
         int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         try {
@@ -971,14 +1023,105 @@ public final class MainActivity extends Activity implements AgentClient.Listener
     }
 
     private void sendPrompt() {
-        String prompt = promptInput == null ? "" : promptInput.getText().toString().trim(); if (prompt.isEmpty()) return;
-        if (!project.isReady()) { showToast("请先选择工程目录"); return; }
-        if (project.snapshot().isEmpty()) { showToast("工程仍在扫描，请稍候"); return; }
+        String prompt = promptInput == null ? "" : promptInput.getText().toString().trim();
+        boolean hasAttachments = !pendingAttachments.isEmpty();
+        if (prompt.isEmpty() && !hasAttachments) return;
         String key;
         try { key = securePrefs.getApiKey(); } catch (Exception error) { showError("无法读取 API Key：" + error.getMessage()); return; }
         if (key.trim().isEmpty()) { showSettingsScreen(); showToast("请先填写 API Key"); return; }
-        events.add(ChatEvent.user(prompt)); renderEvents(); promptInput.setText(""); setBusy(true, "Agent 正在分析");
-        agent.send(prompt, securePrefs.getEndpoint(), securePrefs.getModel(), key, project, this);
+
+        // Build rich prompt with attachments
+        StringBuilder richPrompt = new StringBuilder(prompt.trim());
+        if (hasAttachments) {
+            if (richPrompt.length() > 0) richPrompt.append("\n\n");
+            richPrompt.append("[Attached files]\n");
+            for (Uri uri : new ArrayList<>(pendingAttachments)) {
+                try {
+                    String name = uri.getLastPathSegment();
+                    if (name == null) name = "attachment";
+                    String mime = getContentResolver().getType(uri);
+                    if (mime != null && mime.startsWith("image/")) {
+                        // Read image as base64 for vision-capable models
+                        byte[] bytes = readContentUri(uri, 10 * 1024 * 1024);
+                        String b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP);
+                        richPrompt.append("\n[Image: ").append(name).append("]\n");
+                        richPrompt.append("data:").append(mime).append(";base64,").append(b64).append("\n");
+                    } else {
+                        // Read text files
+                        byte[] bytes = readContentUri(uri, 2 * 1024 * 1024);
+                        String content = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+                        if (content.length() > 50000) content = content.substring(0, 50000) + "\n... (truncated)";
+                        richPrompt.append("\n[File: ").append(name).append("]\n").append(content).append("\n");
+                    }
+                } catch (Exception e) {
+                    richPrompt.append("\n[Attachment: ").append(uri.getLastPathSegment()).append(" (failed to read)]\n");
+                }
+            }
+            pendingAttachments.clear();
+            updateAttachmentStrip();
+        }
+
+        String finalPrompt = richPrompt.toString().trim();
+        if (finalPrompt.isEmpty()) return;
+
+        events.add(ChatEvent.user(finalPrompt.length() > 2000 ? finalPrompt.substring(0, 2000) + "..." : finalPrompt));
+        renderEvents(); promptInput.setText(""); setBusy(true, "Agent 正在分析");
+        agent.send(finalPrompt, securePrefs.getEndpoint(), securePrefs.getModel(), key, project, this);
+    }
+
+    private byte[] readContentUri(Uri uri, int maxSize) throws Exception {
+        try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int total = 0, n;
+            while ((n = in.read(buf)) != -1) {
+                total += n;
+                if (total > maxSize) throw new IllegalStateException("文件过大");
+                out.write(buf, 0, n);
+            }
+            return out.toByteArray();
+        }
+    }
+
+    private void pickAttachment() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/*", "text/*", "application/json", "application/pdf"});
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        startActivityForResult(intent, PICK_ATTACHMENT);
+    }
+
+    private void capturePhoto() {
+        Intent intent = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
+        if (intent.resolveActivity(getPackageManager()) != null) {
+            pendingPhotoUri = null; // Let camera create the image
+            startActivityForResult(intent, CAPTURE_PHOTO);
+        } else {
+            showToast("没有可用的相机应用");
+        }
+    }
+
+    private void updateAttachmentStrip() {
+        if (attachmentStrip == null) return;
+        attachmentStrip.removeAllViews();
+        if (pendingAttachments.isEmpty()) {
+            attachmentStrip.setVisibility(View.GONE);
+            return;
+        }
+        attachmentStrip.setVisibility(View.VISIBLE);
+        for (Uri uri : pendingAttachments) {
+            String name = uri.getLastPathSegment();
+            if (name == null) name = "...";
+            if (name.length() > 20) name = name.substring(0, 18) + "...";
+            TextView chip = text("📄 " + name, 11, TEXT, Typeface.NORMAL);
+            chip.setPadding(dp(8), dp(4), dp(8), dp(4));
+            chip.setBackground(rounded(PANEL_2, 4, LINE));
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            p.setMargins(0, 0, dp(6), dp(4));
+            chip.setOnClickListener(v -> { pendingAttachments.remove(uri); updateAttachmentStrip(); });
+            attachmentStrip.addView(chip, p);
+        }
     }
 
     private void newConversation() { agent.resetConversation(); events.clear(); renderEvents(); showToast("已新建会话"); }
