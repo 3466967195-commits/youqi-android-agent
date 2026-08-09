@@ -21,110 +21,189 @@ final class AgentClient {
         void onError(String message);
         void requestWriteApproval(String path, String oldContent, String newContent,
                                   CompletableFuture<Boolean> decision);
+        void requestCommandApproval(String command, String workingDirectory,
+                                    CompletableFuture<Boolean> decision);
+        void onToolCall(String name, String detail);
+        void onCommandResult(String command, String result);
     }
 
-    private static final int MAX_TOOL_ROUNDS = 20;
+    private static final int MAX_TOOL_ROUNDS = 30;
+    private static final String BASE_SYSTEM_PROMPT =
+            "You are a coding agent running on the user's Android phone. Work autonomously toward the requested task. "
+                    + "Inspect the project before editing. Use relative paths only. Use project file tools for reliable edits. "
+                    + "Use run_command for git, search, builds, tests, scripts, and other terminal work when available. "
+                    + "Never claim that an action succeeded before its tool result confirms it. Keep changes focused. "
+                    + "Reply in the user's language and summarize completed work and verification.";
+
     private final AtomicBoolean busy = new AtomicBoolean(false);
-    private volatile String previousResponseId;
+    private final TermuxBridge termux;
+    private volatile String personaPrompt = "";
+    private JSONArray responsesHistory = new JSONArray();
+    private JSONArray chatHistory = new JSONArray();
+
+    AgentClient(TermuxBridge termux) {
+        this.termux = termux;
+    }
 
     boolean isBusy() {
         return busy.get();
     }
 
-    void resetConversation() {
-        previousResponseId = null;
+    void setPersonaPrompt(String prompt) {
+        personaPrompt = prompt == null ? "" : prompt.trim();
+        resetConversation();
     }
 
-    void send(String prompt, String endpoint, String model, String apiKey,
+    private String systemPrompt() {
+        return personaPrompt.isEmpty() ? BASE_SYSTEM_PROMPT : BASE_SYSTEM_PROMPT + "\n\n" + personaPrompt;
+    }
+
+    synchronized void resetConversation() {
+        responsesHistory = new JSONArray();
+        chatHistory = new JSONArray();
+    }
+
+    void send(String prompt, String configuredEndpoint, String model, String apiKey,
               ProjectStore project, Listener listener) {
         if (!busy.compareAndSet(false, true)) {
             listener.onError("Agent is already working");
             return;
         }
-        Thread worker = new Thread(() -> {
+        new Thread(() -> {
             try {
-                runAgent(prompt, endpoint, model, apiKey, project, listener);
+                runAuto(prompt, configuredEndpoint, model, apiKey, project, listener);
             } catch (Exception error) {
                 listener.onError(error.getMessage() == null ? error.toString() : error.getMessage());
             } finally {
                 busy.set(false);
                 listener.onStatus("Ready");
             }
-        }, "PocketAgent-Network");
-        worker.start();
+        }, "PocketAgent-Network").start();
     }
 
-    private void runAgent(String prompt, String endpoint, String model, String apiKey,
-                          ProjectStore project, Listener listener) throws Exception {
-        listener.onStatus("Thinking");
-        JSONObject request = baseRequest(model);
-        request.put("input", prompt);
-        if (previousResponseId != null) request.put("previous_response_id", previousResponseId);
+    private void runAuto(String prompt, String configuredEndpoint, String model, String apiKey,
+                         ProjectStore project, Listener listener) throws Exception {
+        Endpoints endpoints = Endpoints.from(configuredEndpoint);
+        if (endpoints.chatOnly) {
+            listener.onStatus("Chat Completions");
+            runChat(prompt, endpoints.chat, model, apiKey, project, listener);
+            return;
+        }
+        listener.onStatus("Responses API");
+        try {
+            runResponses(prompt, endpoints.responses, model, apiKey, project, listener);
+        } catch (ApiException error) {
+            if (!error.isResponsesCompatibilityError()) throw error;
+            responsesHistory = new JSONArray();
+            listener.onStatus("Falling back to Chat Completions");
+            runChat(prompt, endpoints.chat, model, apiKey, project, listener);
+        }
+    }
 
+    private synchronized void runResponses(String prompt, String endpoint, String model, String apiKey,
+                                           ProjectStore project, Listener listener) throws Exception {
+        responsesHistory.put(new JSONObject().put("role", "user").put("content", prompt));
+        JSONObject request = responsesRequest(model).put("input", responsesHistory);
         for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
             JSONObject response = post(endpoint, apiKey, request);
-            String responseId = response.optString("id", "");
-            if (!responseId.isEmpty()) previousResponseId = responseId;
-
-            JSONArray calls = functionCalls(response);
+            JSONArray output = response.optJSONArray("output");
+            if (output != null) {
+                for (int i = 0; i < output.length(); i++) responsesHistory.put(output.get(i));
+            }
+            JSONArray calls = responseFunctionCalls(response);
             if (calls.length() == 0) {
-                String text = extractText(response);
-                listener.onAssistant(text.trim().isEmpty() ? "Completed without a text response." : text);
+                emitFinal(extractResponsesText(response), listener);
                 return;
             }
-
-            listener.onStatus("Using project tools");
-            JSONArray outputs = new JSONArray();
-            for (int i = 0; i < calls.length(); i++) {
-                JSONObject call = calls.getJSONObject(i);
-                String result;
-                try {
-                    result = executeTool(call, project, listener);
-                } catch (Exception toolError) {
-                    result = new JSONObject()
-                            .put("ok", false)
-                            .put("error", toolError.getMessage() == null ? toolError.toString() : toolError.getMessage())
-                            .toString();
-                }
-                outputs.put(new JSONObject()
-                        .put("type", "function_call_output")
-                        .put("call_id", call.getString("call_id"))
-                        .put("output", result));
-            }
-            request = baseRequest(model)
-                    .put("previous_response_id", previousResponseId)
-                    .put("input", outputs);
+            listener.onStatus("Using tools");
+            JSONArray outputs = executeCalls(calls, project, listener, false);
+            for (int i = 0; i < outputs.length(); i++) responsesHistory.put(outputs.get(i));
+            trimResponsesHistory();
+            request = responsesRequest(model).put("input", responsesHistory);
         }
-        throw new IllegalStateException("Agent exceeded the 20-step tool limit");
+        throw new IllegalStateException("Agent exceeded the 30-step tool limit");
+    }
+
+    private synchronized void runChat(String prompt, String endpoint, String model, String apiKey,
+                                      ProjectStore project, Listener listener) throws Exception {
+        if (chatHistory.length() == 0) {
+            chatHistory.put(new JSONObject().put("role", "system").put("content", systemPrompt()));
+        }
+        chatHistory.put(new JSONObject().put("role", "user").put("content", prompt));
+        for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            JSONObject request = new JSONObject()
+                    .put("model", model)
+                    .put("messages", chatHistory)
+                    .put("tools", chatTools());
+            JSONObject response = post(endpoint, apiKey, request);
+            JSONArray choices = response.optJSONArray("choices");
+            if (choices == null || choices.length() == 0) {
+                throw new IllegalStateException("Chat Completions response contains no choices");
+            }
+            JSONObject message = choices.getJSONObject(0).getJSONObject("message");
+            chatHistory.put(message);
+            JSONArray toolCalls = message.optJSONArray("tool_calls");
+            if (toolCalls == null || toolCalls.length() == 0) {
+                emitFinal(message.optString("content", ""), listener);
+                trimChatHistory();
+                return;
+            }
+            listener.onStatus("Using tools");
+            JSONArray normalized = normalizeChatCalls(toolCalls);
+            JSONArray outputs = executeCalls(normalized, project, listener, true);
+            for (int i = 0; i < outputs.length(); i++) chatHistory.put(outputs.getJSONObject(i));
+        }
+        throw new IllegalStateException("Agent exceeded the 30-step tool limit");
+    }
+
+    private JSONArray executeCalls(JSONArray calls, ProjectStore project, Listener listener,
+                                   boolean chatFormat) throws Exception {
+        JSONArray outputs = new JSONArray();
+        for (int i = 0; i < calls.length(); i++) {
+            JSONObject call = calls.getJSONObject(i);
+            String result;
+            try {
+                result = executeTool(call, project, listener);
+            } catch (Exception toolError) {
+                result = new JSONObject().put("ok", false)
+                        .put("error", toolError.getMessage() == null ? toolError.toString() : toolError.getMessage())
+                        .toString();
+            }
+            if (chatFormat) {
+                outputs.put(new JSONObject().put("role", "tool")
+                        .put("tool_call_id", call.getString("call_id")).put("content", result));
+            } else {
+                outputs.put(new JSONObject().put("type", "function_call_output")
+                        .put("call_id", call.getString("call_id")).put("output", result));
+            }
+        }
+        return outputs;
     }
 
     private String executeTool(JSONObject call, ProjectStore project, Listener listener) throws Exception {
         String name = call.getString("name");
         JSONObject arguments = new JSONObject(call.optString("arguments", "{}"));
+        listener.onToolCall(name, toolDetail(name, arguments));
         switch (name) {
-            case "list_files": {
-                String path = arguments.optString("path", "");
-                return new JSONObject().put("ok", true).put("entries", project.listFiles(path)).toString();
-            }
+            case "list_files":
+                return new JSONObject().put("ok", true)
+                        .put("entries", project.listFiles(arguments.optString("path", ""))).toString();
             case "read_file": {
                 String path = arguments.getString("path");
                 return new JSONObject().put("ok", true).put("path", path)
                         .put("content", project.readFile(path)).toString();
             }
-            case "search_files": {
-                String query = arguments.getString("query");
-                String path = arguments.optString("path", "");
+            case "search_files":
                 return new JSONObject().put("ok", true)
-                        .put("matches", project.search(query, path)).toString();
-            }
+                        .put("matches", project.search(arguments.getString("query"),
+                                arguments.optString("path", ""))).toString();
             case "write_file": {
                 String path = ProjectStore.normalize(arguments.getString("path"));
                 String content = arguments.getString("content");
                 String oldContent = project.readIfExists(path);
                 CompletableFuture<Boolean> decision = new CompletableFuture<>();
                 listener.requestWriteApproval(path, oldContent, content, decision);
-                boolean approved = decision.get(10, TimeUnit.MINUTES);
-                if (!approved) {
+                if (!decision.get(10, TimeUnit.MINUTES)) {
                     return new JSONObject().put("ok", false).put("rejected", true)
                             .put("message", "User rejected the proposed write").toString();
                 }
@@ -132,54 +211,106 @@ final class AgentClient {
                 return new JSONObject().put("ok", true).put("path", path)
                         .put("bytes", content.getBytes(StandardCharsets.UTF_8).length).toString();
             }
+            case "run_command": {
+                String command = arguments.getString("command");
+                String path = ProjectStore.normalize(arguments.optString("path", ""));
+                CompletableFuture<Boolean> decision = new CompletableFuture<>();
+                listener.requestCommandApproval(command, path, decision);
+                if (!decision.get(10, TimeUnit.MINUTES)) {
+                    return new JSONObject().put("ok", false).put("rejected", true)
+                            .put("message", "User rejected command execution").toString();
+                }
+                String result = termux.run(command, project.getTreeUri(), path);
+                listener.onCommandResult(command, result);
+                return result;
+            }
             default:
                 throw new IllegalArgumentException("Unknown tool: " + name);
         }
     }
 
-    private static JSONObject baseRequest(String model) throws Exception {
-        return new JSONObject()
-                .put("model", model)
-                .put("instructions", "You are a coding agent working in a user-authorized Android project folder. "
-                        + "Inspect files before changing them. Use relative paths only. Keep edits focused. "
-                        + "Never claim that a write succeeded until the write_file tool confirms it. "
-                        + "There is no shell tool in this version. Reply in the user's language.")
-                .put("tools", tools());
+    private static String toolDetail(String name, JSONObject arguments) {
+        switch (name) {
+            case "list_files": return arguments.optString("path", ".");
+            case "read_file":
+            case "write_file": return arguments.optString("path", "");
+            case "search_files":
+                return arguments.optString("query", "") + "  " + arguments.optString("path", ".");
+            case "run_command": return "$ " + arguments.optString("command", "");
+            default: return "";
+        }
     }
 
-    private static JSONArray tools() throws Exception {
+    private JSONObject responsesRequest(String model) throws Exception {
+        return new JSONObject().put("model", model).put("instructions", systemPrompt())
+                .put("tools", responseTools());
+    }
+
+    private static JSONArray responseTools() throws Exception {
+        JSONArray result = new JSONArray();
+        JSONArray definitions = toolDefinitions();
+        for (int i = 0; i < definitions.length(); i++) {
+            JSONObject definition = definitions.getJSONObject(i);
+            result.put(new JSONObject().put("type", "function")
+                    .put("name", definition.getString("name"))
+                    .put("description", definition.getString("description"))
+                    .put("parameters", definition.getJSONObject("parameters"))
+                    .put("strict", true));
+        }
+        return result;
+    }
+
+    private static JSONArray chatTools() throws Exception {
+        JSONArray result = new JSONArray();
+        JSONArray definitions = toolDefinitions();
+        for (int i = 0; i < definitions.length(); i++) {
+            JSONObject definition = definitions.getJSONObject(i);
+            result.put(new JSONObject().put("type", "function").put("function", definition));
+        }
+        return result;
+    }
+
+    private static JSONArray toolDefinitions() throws Exception {
         JSONArray tools = new JSONArray();
-        tools.put(tool("list_files", "List direct children of a project directory",
-                new JSONObject().put("type", "object")
-                        .put("properties", new JSONObject().put("path",
-                                new JSONObject().put("type", "string").put("description", "Relative directory path; empty for root")))
-                        .put("required", new JSONArray().put("path")).put("additionalProperties", false)));
-        tools.put(tool("read_file", "Read a UTF-8 text file, up to 1 MB",
-                new JSONObject().put("type", "object")
-                        .put("properties", new JSONObject().put("path",
-                                new JSONObject().put("type", "string").put("description", "Relative file path")))
-                        .put("required", new JSONArray().put("path")).put("additionalProperties", false)));
-        tools.put(tool("search_files", "Search text across project files",
-                new JSONObject().put("type", "object")
-                        .put("properties", new JSONObject()
-                                .put("query", new JSONObject().put("type", "string"))
-                                .put("path", new JSONObject().put("type", "string").put("description", "Relative path; empty for all files")))
-                        .put("required", new JSONArray().put("query").put("path")).put("additionalProperties", false)));
-        tools.put(tool("write_file", "Create or fully replace a UTF-8 text file after user approval",
-                new JSONObject().put("type", "object")
-                        .put("properties", new JSONObject()
-                                .put("path", new JSONObject().put("type", "string"))
-                                .put("content", new JSONObject().put("type", "string")))
-                        .put("required", new JSONArray().put("path").put("content")).put("additionalProperties", false)));
+        tools.put(definition("list_files", "List direct children of a project directory",
+                objectSchema(new JSONObject().put("path", stringSchema("Relative directory path; empty for root")),
+                        new JSONArray().put("path"))));
+        tools.put(definition("read_file", "Read a UTF-8 project file, up to 1 MB",
+                objectSchema(new JSONObject().put("path", stringSchema("Relative file path")),
+                        new JSONArray().put("path"))));
+        tools.put(definition("search_files", "Search text across project files",
+                objectSchema(new JSONObject()
+                                .put("query", stringSchema("Text to search for"))
+                                .put("path", stringSchema("Relative path; empty for all files")),
+                        new JSONArray().put("query").put("path"))));
+        tools.put(definition("write_file", "Create or fully replace a UTF-8 file after user approval",
+                objectSchema(new JSONObject()
+                                .put("path", stringSchema("Relative file path"))
+                                .put("content", stringSchema("Complete new file content")),
+                        new JSONArray().put("path").put("content"))));
+        tools.put(definition("run_command", "Run a shell command in Termux after user approval",
+                objectSchema(new JSONObject()
+                                .put("command", stringSchema("Shell command to run"))
+                                .put("path", stringSchema("Relative working directory; empty for project root")),
+                        new JSONArray().put("command").put("path"))));
         return tools;
     }
 
-    private static JSONObject tool(String name, String description, JSONObject parameters) throws Exception {
-        return new JSONObject().put("type", "function").put("name", name)
-                .put("description", description).put("parameters", parameters).put("strict", true);
+    private static JSONObject definition(String name, String description, JSONObject parameters) throws Exception {
+        return new JSONObject().put("name", name).put("description", description)
+                .put("parameters", parameters).put("strict", true);
     }
 
-    private static JSONArray functionCalls(JSONObject response) {
+    private static JSONObject objectSchema(JSONObject properties, JSONArray required) throws Exception {
+        return new JSONObject().put("type", "object").put("properties", properties)
+                .put("required", required).put("additionalProperties", false);
+    }
+
+    private static JSONObject stringSchema(String description) throws Exception {
+        return new JSONObject().put("type", "string").put("description", description);
+    }
+
+    private static JSONArray responseFunctionCalls(JSONObject response) {
         JSONArray calls = new JSONArray();
         JSONArray output = response.optJSONArray("output");
         if (output == null) return calls;
@@ -190,7 +321,19 @@ final class AgentClient {
         return calls;
     }
 
-    private static String extractText(JSONObject response) {
+    private static JSONArray normalizeChatCalls(JSONArray toolCalls) throws Exception {
+        JSONArray calls = new JSONArray();
+        for (int i = 0; i < toolCalls.length(); i++) {
+            JSONObject item = toolCalls.getJSONObject(i);
+            JSONObject function = item.getJSONObject("function");
+            calls.put(new JSONObject().put("call_id", item.getString("id"))
+                    .put("name", function.getString("name"))
+                    .put("arguments", function.optString("arguments", "{}")));
+        }
+        return calls;
+    }
+
+    private static String extractResponsesText(JSONObject response) {
         String direct = response.optString("output_text", "");
         if (!direct.trim().isEmpty()) return direct;
         StringBuilder text = new StringBuilder();
@@ -210,6 +353,30 @@ final class AgentClient {
             }
         }
         return text.toString();
+    }
+
+    private static void emitFinal(String text, Listener listener) {
+        listener.onAssistant(text == null || text.trim().isEmpty()
+                ? "Completed without a text response." : text);
+    }
+
+    private synchronized void trimChatHistory() throws Exception {
+        if (chatHistory.length() <= 60) return;
+        JSONArray trimmed = new JSONArray();
+        trimmed.put(chatHistory.getJSONObject(0));
+        for (int i = Math.max(1, chatHistory.length() - 40); i < chatHistory.length(); i++) {
+            trimmed.put(chatHistory.getJSONObject(i));
+        }
+        chatHistory = trimmed;
+    }
+
+    private synchronized void trimResponsesHistory() throws Exception {
+        if (responsesHistory.length() <= 80) return;
+        JSONArray trimmed = new JSONArray();
+        for (int i = Math.max(0, responsesHistory.length() - 60); i < responsesHistory.length(); i++) {
+            trimmed.put(responsesHistory.get(i));
+        }
+        responsesHistory = trimmed;
     }
 
     private static JSONObject post(String endpoint, String apiKey, JSONObject body) throws Exception {
@@ -243,8 +410,51 @@ final class AgentClient {
                 if (error != null) message = error.optString("message", message);
             } catch (Exception ignored) {
             }
-            throw new IllegalStateException("API " + status + ": " + message);
+            throw new ApiException(status, endpoint, message);
         }
         return new JSONObject(response.toString());
+    }
+
+    private static final class ApiException extends Exception {
+        final int status;
+
+        ApiException(int status, String endpoint, String message) {
+            super("API " + status + " at " + endpoint + ": " + message);
+            this.status = status;
+        }
+
+        boolean isResponsesCompatibilityError() {
+            if (status == 404 || status == 405) return true;
+            String value = getMessage() == null ? "" : getMessage().toLowerCase();
+            return status == 400 && ((value.contains("tool call") && value.contains("call_id"))
+                    || value.contains("previous_response_id") || value.contains("unsupported response"));
+        }
+    }
+
+    private static final class Endpoints {
+        final String responses;
+        final String chat;
+        final boolean chatOnly;
+
+        Endpoints(String responses, String chat, boolean chatOnly) {
+            this.responses = responses;
+            this.chat = chat;
+            this.chatOnly = chatOnly;
+        }
+
+        static Endpoints from(String configured) {
+            String value = configured == null ? "" : configured.trim();
+            while (value.endsWith("/")) value = value.substring(0, value.length() - 1);
+            if (value.isEmpty()) throw new IllegalArgumentException("API address is empty");
+            if (value.endsWith("/chat/completions")) {
+                return new Endpoints(value.substring(0, value.length() - "/chat/completions".length()) + "/responses",
+                        value, true);
+            }
+            if (value.endsWith("/responses")) {
+                String base = value.substring(0, value.length() - "/responses".length());
+                return new Endpoints(value, base + "/chat/completions", false);
+            }
+            return new Endpoints(value + "/responses", value + "/chat/completions", false);
+        }
     }
 }

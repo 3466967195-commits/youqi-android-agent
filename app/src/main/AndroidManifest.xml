@@ -1,13 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <package android:name="com.termux" />
+    </queries>
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
 
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
-        android:icon="@mipmap/ic_launcher"
-        android:label="Pocket Agent"
+        android:icon="@drawable/icon_paint"
+        android:roundIcon="@drawable/icon_paint"
+        android:label="油漆"
         android:supportsRtl="true"
         android:theme="@style/Theme.PocketAgent">
         <activity
@@ -18,5 +23,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <receiver
+            android:name=".TermuxResultReceiver"
+            android:exported="false" />
     </application>
 </manifest>

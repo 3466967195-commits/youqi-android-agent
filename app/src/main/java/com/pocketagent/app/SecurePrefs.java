@@ -15,6 +15,9 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 
 final class SecurePrefs {
+    static final String MODE_ASK = "ask";
+    static final String MODE_STANDARD = "standard";
+    static final String MODE_FULL = "full";
     private static final String ALIAS = "pocket_agent_api_key";
     private static final String PREFS = "pocket_agent_settings";
     private final SharedPreferences preferences;
@@ -23,30 +26,82 @@ final class SecurePrefs {
         preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
+    String getProvider() {
+        String saved = preferences.getString("provider", "");
+        if (!saved.isEmpty()) return saved;
+        return ProviderCatalog.infer(preferences.getString("endpoint", "https://api.openai.com/v1")).id;
+    }
+
     String getEndpoint() {
-        return preferences.getString("endpoint", "https://api.openai.com/v1/responses");
+        return getEndpoint(getProvider());
+    }
+
+    String getEndpoint(String providerId) {
+        String saved = preferences.getString("endpoint." + providerId, "");
+        if (!saved.isEmpty()) return saved;
+        String legacy = preferences.getString("endpoint", "");
+        if (!legacy.isEmpty() && ProviderCatalog.infer(legacy).id.equals(providerId)) return legacy;
+        return ProviderCatalog.byId(providerId).baseUrl;
     }
 
     String getModel() {
-        return preferences.getString("model", "gpt-5.3-codex");
+        return getModel(getProvider());
     }
 
-    void saveConnection(String endpoint, String model, String apiKey) throws Exception {
+    String getModel(String providerId) {
+        String saved = preferences.getString("model." + providerId, "");
+        if (!saved.isEmpty()) return saved;
+        String legacyEndpoint = preferences.getString("endpoint", "");
+        if (ProviderCatalog.infer(legacyEndpoint).id.equals(providerId)) {
+            return preferences.getString("model", "");
+        }
+        return providerId.equals("openai") ? "gpt-5.3-codex" : "";
+    }
+
+    void saveConnection(String providerId, String endpoint, String model, String apiKey) throws Exception {
         SharedPreferences.Editor editor = preferences.edit()
-                .putString("endpoint", endpoint.trim())
-                .putString("model", model.trim());
+                .putString("provider", providerId)
+                .putString("endpoint." + providerId, endpoint.trim())
+                .putString("model." + providerId, model.trim());
         if (!apiKey.trim().isEmpty()) {
-            editor.putString("api_key", encrypt(apiKey.trim()));
+            editor.putString("api_key." + providerId, encrypt(apiKey.trim()));
         }
         editor.apply();
     }
 
     boolean hasApiKey() {
-        return preferences.contains("api_key");
+        return hasApiKey(getProvider());
+    }
+
+    boolean hasApiKey(String providerId) {
+        if (preferences.contains("api_key." + providerId)) return true;
+        String legacyEndpoint = preferences.getString("endpoint", "");
+        return preferences.contains("api_key") && ProviderCatalog.infer(legacyEndpoint).id.equals(providerId);
+    }
+
+    String getExecutionMode() {
+        return preferences.getString("execution_mode", MODE_STANDARD);
+    }
+
+    void setExecutionMode(String mode) {
+        if (!MODE_ASK.equals(mode) && !MODE_STANDARD.equals(mode) && !MODE_FULL.equals(mode)) {
+            mode = MODE_STANDARD;
+        }
+        preferences.edit().putString("execution_mode", mode).apply();
     }
 
     String getApiKey() throws Exception {
-        String encoded = preferences.getString("api_key", "");
+        return getApiKey(getProvider());
+    }
+
+    String getApiKey(String providerId) throws Exception {
+        String encoded = preferences.getString("api_key." + providerId, "");
+        if (encoded.isEmpty()) {
+            String legacyEndpoint = preferences.getString("endpoint", "");
+            if (ProviderCatalog.infer(legacyEndpoint).id.equals(providerId)) {
+                encoded = preferences.getString("api_key", "");
+            }
+        }
         return encoded.isEmpty() ? "" : decrypt(encoded);
     }
 
